@@ -1,7 +1,13 @@
-from pprint import pprint
-
 from dotenv import load_dotenv
-from langchain_core.prompts import PromptTemplate
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    MessagesPlaceholder,
+    SystemMessagePromptTemplate,
+)
+from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 
@@ -10,17 +16,24 @@ from app.ingest import create_or_get_index
 
 load_dotenv()
 
+# Store for conversation sessions
+store = {}
 
-ANSWER_PROMPT = PromptTemplate.from_template(
-    """{system}
 
-Question: {question}
+def get_session_history(session_id: str) -> ChatMessageHistory:
+    if session_id not in store:
+        store[session_id] = ChatMessageHistory()
+    return store[session_id]
 
-Context:
-{context}
 
-Answer (with citations):
-"""
+ANSWER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        SystemMessagePromptTemplate.from_template(SYSTEM_PROMPT),
+        MessagesPlaceholder(variable_name="history"),
+        HumanMessagePromptTemplate.from_template(
+            """{query}, provided this context: {context}"""
+        ),
+    ]
 )
 
 
@@ -45,23 +58,42 @@ def main():
 
     llm = ChatOpenAI(model="gpt-5", temperature=0, reasoning={"effort": "minimal"})
 
+    # Build the RAG chain using LCEL
+    def retrieve_and_format(query: str) -> str:
+        docs = retriever.invoke(query)
+        return format_context(docs)
+
+    # Create the RAG chain
+    rag_chain = ANSWER_PROMPT | llm | StrOutputParser()
+
+    # Wrap with message history
+    conversational_rag_chain = RunnableWithMessageHistory(
+        rag_chain,
+        get_session_history,
+        input_messages_key="query",
+        history_messages_key="history",
+    )
+
+    session_id = "default_session"
     print("Ask me about your docs. Type 'exit' to quit.")
 
-    prev_resp = None
     while True:
         q = input("\n> ")
         if q.strip().lower() in ("exit", "quit"):
             break
 
-        docs = retriever.invoke(q)
-        ctx = format_context(docs)
-        prompt = ANSWER_PROMPT.format(system=SYSTEM_PROMPT, question=q, context=ctx)
-
-        prev_id = prev_resp.response_metadata.get("id", None) if prev_resp else None
-        resp = llm.invoke(prompt, previous_response_id=prev_id)
-
-        print("\n" + resp.content[0].get("text"))
-        prev_resp = resp
+        try:
+            response = conversational_rag_chain.invoke(
+                {"query": q, "context": retrieve_and_format(q)},
+                config={
+                    "configurable": {"session_id": session_id},
+                },
+            )
+            print("\n" + response)
+            # print("session history: ", get_session_history(session_id))
+        except (ValueError, RuntimeError, ConnectionError) as e:
+            print(f"\nError: {e}")
+            print("Please try again.")
 
 
 if __name__ == "__main__":
