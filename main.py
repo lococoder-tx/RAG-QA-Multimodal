@@ -56,7 +56,13 @@ def main():
         search_type="similarity", search_kwargs={"k": 4}
     )
 
-    llm = ChatOpenAI(model="gpt-5", temperature=0, reasoning={"effort": "minimal"})
+    llm = ChatOpenAI(
+        model="gpt-5",
+        temperature=0,
+        reasoning={"effort": "minimal"},
+        use_responses_api=True,
+        output_version="responses/v1",
+    )
 
     # Build the RAG chain using LCEL
     def retrieve_and_format(query: str) -> str:
