@@ -1,12 +1,13 @@
 import time
 import uuid
+from typing import List
 
 from langchain.retrievers.multi_vector import MultiVectorRetriever
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from unstructured.partition.pdf import partition_pdf
+from unstructured.partition.pdf import Element, partition_pdf
 
 
 def summarize_text_or_table(data):
@@ -79,6 +80,7 @@ def _run_with_rate_limit_retries(
             index_start = index_end
         except Exception as e:
             message = str(e).lower()
+            print(message)
             if (
                 "rate limit" in message
                 or "429" in message
@@ -97,14 +99,14 @@ def _run_with_rate_limit_retries(
 
 
 def create_docs(
-    texts,
-    tables,
-    images,
     text_summaries,
     table_summaries,
     image_summaries,
-    retriever,
-    id_key,
+    texts: List[Element],
+    tables: List[Element],
+    images: List[str],
+    retriever: MultiVectorRetriever,
+    id_key: str,
 ):
     # Add texts
     doc_ids = [str(uuid.uuid4()) for _ in texts]
@@ -113,6 +115,13 @@ def create_docs(
         Document(page_content=summary, metadata={id_key: doc_ids[i]})
         for i, summary in enumerate(text_summaries)
     ]
+    texts = [
+        Document(
+            page_content=str(text),
+            metadata={id_key: doc_ids[i], "type": "text", **text.metadata.to_dict()},
+        )
+        for i, text in enumerate(texts)
+    ]
     retriever.vectorstore.add_documents(summary_texts)
     retriever.docstore.mset(list(zip(doc_ids, texts)))
 
@@ -120,8 +129,24 @@ def create_docs(
     table_ids = [str(uuid.uuid4()) for _ in tables]
     print(f"Adding {len(tables)} tables")
     summary_tables = [
-        Document(page_content=summary, metadata={id_key: table_ids[i]})
+        Document(
+            page_content=summary,
+            metadata={
+                id_key: table_ids[i],
+            },
+        )
         for i, summary in enumerate(table_summaries)
+    ]
+    tables = [
+        Document(
+            page_content=str(table),
+            metadata={
+                id_key: table_ids[i],
+                "type": "table",
+                **table.metadata.to_dict(),
+            },
+        )
+        for i, table in enumerate(tables)
     ]
     retriever.vectorstore.add_documents(summary_tables)
     retriever.docstore.mset(list(zip(table_ids, tables)))
@@ -132,6 +157,10 @@ def create_docs(
     summary_img = [
         Document(page_content=summary, metadata={id_key: img_ids[i]})
         for i, summary in enumerate(image_summaries)
+    ]
+    images = [
+        Document(page_content=image, metadata={id_key: img_ids[i], "type": "image"})
+        for i, image in enumerate(images)
     ]
     retriever.vectorstore.add_documents(summary_img)
     retriever.docstore.mset(list(zip(img_ids, images)))
@@ -180,12 +209,12 @@ def load_pdf(file_path: str, retriever: MultiVectorRetriever, id_key: str):
     image_summaries = summarize_images(images_b64)
 
     create_docs(
-        texts,
-        tables,
-        images_b64,
         text_summaries,
         table_summaries,
         image_summaries,
+        texts,
+        tables,
+        images_b64,
         retriever,
         id_key,
     )

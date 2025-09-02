@@ -7,4 +7,5 @@ pillow
 lxml
 tiktoken
 langchain-pinecone
+redis
 "unstructured[all-docs]"
